@@ -431,7 +431,13 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+
+    mx = torch.max(in_features, dim=dim, keepdim=True).values
+    shifted = in_features - mx;
+    exp = torch.exp(shifted)
+    sum = torch.sum(exp, dim=dim, keepdim=True)
+
+    return exp / sum
 
 
 def run_cross_entropy(
@@ -449,7 +455,17 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+
+    mx = torch.max(input=inputs, dim=1, keepdim=True).values
+    shifted = inputs - mx
+    ex = torch.exp(shifted)
+    loss = 0
+    for i in range(inputs.shape[0]):
+        sum = 0
+        for j in range(inputs.shape[1]):
+            sum += ex[i][j]
+        loss += mx[i] + torch.log(sum) - inputs[i][targets[i]]
+    return loss / targets.shape[0]
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -461,7 +477,18 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+
+    l2 = 0
+    for p in parameters:
+        if p.grad is not None:
+            l2 += torch.sum(torch.pow(p.grad, 2))
+    l2 = torch.sqrt(l2)
+
+    if(l2 > max_l2_norm):
+        for p in parameters:
+            if p.grad is not None:
+                p.grad *= max_l2_norm / l2
+
 
 
 def get_adamw_cls() -> Any:
