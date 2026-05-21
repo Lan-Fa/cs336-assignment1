@@ -12,6 +12,44 @@ from torch import Tensor
 
 EPS = 1e-5
 
+class AdamWOptimizer(torch.optim.Optimizer):
+    def __init__(self, params, lr, betas, eps, weight_decay):
+        default = {
+            'lr': lr,
+            'betas': betas,
+            'eps': eps,
+            'weight_decay': weight_decay
+        }
+        super().__init__(params, default)
+
+    def step(self, closure: None = None):
+        with torch.no_grad():
+            for group in self.param_groups:
+                lr = group['lr']
+                [beta1, beta2] = group['betas']
+                eps = group['eps']
+                weight_decay = group['weight_decay']
+
+                for param in group['params']:
+                    if param.grad is None:
+                        continue
+                    if 'step' not in self.state[param]:
+                        self.state[param]['step'] = 0
+                        self.state[param]['m'] = torch.zeros_like(param)
+                        self.state[param]['v'] = torch.zeros_like(param)
+
+                    self.state[param]['step'] += 1
+                    self.state[param]['m'] = beta1 * self.state[param]['m'] + (1 - beta1) * param.grad
+                    self.state[param]['v'] = beta2 * self.state[param]['v'] + (1 - beta2) * torch.pow(param.grad, 2)
+
+                    m = self.state[param]['m'] / (1 - beta1 ** self.state[param]['step'])
+                    v = self.state[param]['v'] / (1 - beta2 ** self.state[param]['step'])
+
+                    tmp = lr * weight_decay * param
+                    param.sub_(tmp)
+                    tmp = lr * (m / (torch.sqrt(v) + eps))
+                    param.sub_(tmp)
+        return
 
 def run_linear(
         d_in: int,
@@ -33,7 +71,6 @@ def run_linear(
     """
 
     return torch.matmul(in_features, weights.T)
-
 
 def run_embedding(
         vocab_size: int,
@@ -663,12 +700,11 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
             if p.grad is not None:
                 p.grad *= max_l2_norm / l2
 
-
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamWOptimizer
 
 
 def run_get_lr_cosine_schedule(
@@ -696,8 +732,18 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
 
+    if it < warmup_iters:
+        res = it / warmup_iters * max_learning_rate
+    elif warmup_iters <= it <= cosine_cycle_iters:
+        PI = math.acos(-1)
+        need = cosine_cycle_iters - warmup_iters
+        now = it - warmup_iters
+        res = (math.cos(now / need * PI) + 1) * 0.5 * (max_learning_rate - min_learning_rate) + min_learning_rate
+    else :
+        res = min_learning_rate
+
+    return res
 
 def run_save_checkpoint(
         model: torch.nn.Module,
