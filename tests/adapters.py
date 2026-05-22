@@ -5,10 +5,12 @@ from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
+import numpy.random as npr
 import math
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+from triton.language import dtype
 
 EPS = 1e-5
 
@@ -202,9 +204,7 @@ def run_multihead_self_attention(
     K = K.transpose(-2, -3)
     V = V.transpose(-2, -3)
 
-    mask = torch.tril(
-        torch.ones(Q.shape[-2], Q.shape[-2], dtype=torch.bool, device=in_features.device)
-    )
+    mask = torch.ones(Q.shape[-2], Q.shape[-2], dtype=torch.bool, device=in_features.device).tril()
     res = run_scaled_dot_product_attention(Q, K, V, mask)
 
     res = res.transpose(-2, -3)
@@ -626,7 +626,21 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    N = dataset.size - context_length
+    P = npr.randint(0, N, size=batch_size)
+    X = torch.empty(batch_size, context_length, dtype=torch.long, device=device)
+    Y = torch.empty(batch_size, context_length, dtype=torch.long, device=device)
+    cur = 0
+    for pos in P:
+        x = []
+        y = []
+        for i in range(context_length):
+            x.append(dataset[pos + i])
+            y.append((dataset[pos + i + 1]))
+        X[cur] = torch.tensor(x, dtype=torch.long, device=device)
+        Y[cur] = torch.tensor(y, dtype=torch.long, device=device)
+        cur += 1
+    return X, Y
 
 
 def run_softmax(in_features: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
