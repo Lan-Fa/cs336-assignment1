@@ -12,6 +12,8 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from triton.language import dtype
 
+import regex
+
 EPS = 1e-5
 
 class AdamWOptimizer(torch.optim.Optimizer):
@@ -809,6 +811,104 @@ def run_load_checkpoint(
 
     return checkpoint["iterations"]
 
+class BPETokenizer:
+
+    def __init__(self, vocab, merges, special_tokens):
+        self.vocab = vocab
+        self.i_vocab = {}
+        for key in vocab:
+            val = vocab[key]
+            self.i_vocab[val] = key
+        self.merges = merges
+        self.special_tokens: list[str] = special_tokens or []
+        self.pat = regex.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+
+        self.merge_ranks = {}
+        for rank, pair in enumerate(merges):
+            self.merge_ranks[pair] = rank
+
+    def merge(self, tokens):
+        now = tokens
+
+        while True:
+            best_pair = None
+            best_rank = None
+
+            for i in range(len(now) - 1):
+                pair = (now[i], now[i + 1])
+                rank = self.merge_ranks.get(pair)
+
+                if rank is not None:
+                    if best_rank is None or rank < best_rank:
+                        best_rank = rank
+                        best_pair = pair
+
+            if best_pair is None:
+                break
+
+            nxt = []
+            i = 0
+
+            while i < len(now):
+                if i < len(now) - 1 and (now[i], now[i + 1]) == best_pair:
+                    nxt.append(now[i] + now[i + 1])
+                    i += 2
+                else:
+                    nxt.append(now[i])
+                    i += 1
+
+            now = nxt
+
+        return now
+
+    def decode(self, ids):
+        res = b""
+        for token_id in ids:
+            res += self.vocab[token_id]
+        return res.decode("utf-8", errors="replace")
+
+    def encode_chunk(self, text):
+        tokens = [bytes([ch]) for ch in text.encode("utf-8")]
+        tokens = self.merge(tokens)
+
+        res = []
+        for token in tokens:
+            res.append(self.i_vocab[token])
+
+        return res
+
+    def encode_without_special(self, text):
+        res = []
+        chunks = regex.findall(self.pat, text)
+        for chunk in chunks:
+            res.extend(self.encode_chunk(chunk))
+        return res
+
+    def encode(self, text):
+        if not self.special_tokens:
+            return self.encode_without_special(text)
+
+        special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+        special_pattern = "(" + "|".join(regex.escape(tok) for tok in special_tokens) + ")"
+        parts = regex.split(special_pattern, text)
+
+        res = []
+        for part in parts:
+            if part == "":
+                continue
+            elif part in self.special_tokens:
+                res.append(self.i_vocab[part.encode("utf-8")])
+            else:
+                res.extend(self.encode_without_special(part))
+
+        return res
+
+    def encode_iterable(self, iterable):
+        for text in iterable:
+            ids = self.encode(text)
+            for token_id in ids:
+                yield token_id
+
 def get_tokenizer(
         vocab: dict[int, bytes],
         merges: list[tuple[bytes, bytes]],
@@ -829,7 +929,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    return BPETokenizer(vocab, merges, special_tokens)
 
 
 def run_train_bpe(
