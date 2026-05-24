@@ -959,4 +959,76 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    pat = regex.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+
+    with open(input_path, "r", encoding="utf-8") as file:
+        text = file.read()
+
+        cnt = {}
+        if len(special_tokens) > 0:
+            spt = "|".join(regex.escape(spt) for spt in sorted(special_tokens, key=len, reverse=True))
+            chunks = regex.split(f"({spt})", text)
+        else:
+            chunks = [text]
+
+        sp_token = set(special_tokens)
+
+        for chunk in chunks:
+            if chunk == "" or chunk in sp_token:
+                continue
+
+            pre_tokens = regex.findall(pat, chunk)
+
+            for pat_text in pre_tokens:
+                byte_text = pat_text.encode("utf-8")
+                byte_token = tuple(bytes([b]) for b in byte_text)
+                if byte_token in cnt:
+                    cnt[byte_token] += 1
+                else:
+                    cnt[byte_token] = 1
+
+        vocab = {}
+        for i in range(256):
+            vocab[i] = bytes([i])
+        for spt in special_tokens:
+            vocab[len(vocab)] = spt.encode("utf-8")
+
+        merges = []
+        while len(vocab) < vocab_size:
+            pair_cnt = {}
+            for token, c in cnt.items():
+                for i in range(len(token) - 1):
+                    pair = (token[i], token[i + 1])
+
+                    if pair in pair_cnt:
+                        pair_cnt[pair] += c
+                    else:
+                        pair_cnt[pair] = c
+            if len(pair_cnt) == 0:
+                break
+            mx_pr = max(pair_cnt, key=lambda pair: (pair_cnt[pair], pair))
+            merges.append(mx_pr)
+
+            new_token = mx_pr[0] + mx_pr[1]
+            vocab[len(vocab)] = new_token
+
+            new_cnt = {}
+            for token, c in cnt.items():
+                new_token = []
+                i = 0
+                while i < len(token):
+                    if i < len(token) - 1 and mx_pr == (token[i], token[i + 1]):
+                        new_token.append(token[i] + token[i + 1])
+                        i += 2
+                    else:
+                        new_token.append(token[i])
+                        i += 1
+                new_token = tuple(new_token)
+
+                if new_token in new_cnt:
+                    new_cnt[new_token] += c
+                else:
+                    new_cnt[new_token] = c
+            cnt = new_cnt
+
+        return vocab, merges
